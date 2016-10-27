@@ -3,7 +3,9 @@ import os
 
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.externals import joblib
+from sklearn.feature_selection import SelectFromModel
 from sklearn.linear_model import LogisticRegression
+from sklearn.neural_network import MLPClassifier
 from sklearn.pipeline import Pipeline, FeatureUnion
 from sklearn.preprocessing import OneHotEncoder, LabelEncoder, Imputer, MinMaxScaler
 from numpy import float64
@@ -13,12 +15,9 @@ from sklearn.decomposition import PCA
 from sklearn.utils import column_or_1d
 from sklearn.utils.validation import check_is_fitted
 
-fname = './trained_models/vote_full.pkl'
+fname = './trained_models/vote_nn6.pkl'
 
 degree_map = {'Primary': 0, 'Diploma': 1, 'Degree': 2, 'Masters': 3}
-loc_map = {}
-
-l = 0
 
 
 class ItemSelector(BaseEstimator, TransformerMixin):
@@ -86,13 +85,13 @@ class LabelEncoderNew(BaseEstimator, TransformerMixin):
         """
         check_is_fitted(self, 'classes_')
         y = column_or_1d(y.ravel(), warn=True)
-
         classes = np.unique(y)
         if isinstance(classes[0], np.float64):
             classes = classes[np.isfinite(classes)]
         _check_numpy_unicode_bug(classes)
         if len(np.intersect1d(classes, self.classes_)) < len(classes):
             diff = np.setdiff1d(classes, self.classes_)
+            print(self.classes_)
             raise ValueError("y contains new labels: %s" % str(diff))
         return np.searchsorted(self.classes_, y).reshape(-1, 1)
 
@@ -136,19 +135,27 @@ pipeline = Pipeline([
             ('f8', ItemMap(33, False))
         ]
     )),
-    ('imp', Imputer()),
+    ('imp', Imputer(strategy="most_frequent")),
     ('ohe1', OneHotEncoder(categorical_features=(0, 27, 30, 32, 33), dtype=np.float64, sparse=False,
                            handle_unknown='ignore')),
-    ('ohe2', OneHotEncoder(categorical_features=(32, 33), dtype=np.float64, sparse=False, handle_unknown='ignore',
-                           n_values=l)),
+    ('ohe2', OneHotEncoder(categorical_features=(32, 33), dtype=np.float64, sparse=False, handle_unknown='ignore')),
     ('sc', MinMaxScaler()),
-    ('pca', PCA(n_components=500, svd_solver='arpack')),
-    ('lr', LogisticRegression())
-
+    ('pca', PCA(n_components=200, svd_solver='arpack')),
+    ('feature_sel', SelectFromModel(LogisticRegression())),
+    ('lr', MLPClassifier(solver='lbfgs', alpha=1e-5, hidden_layer_sizes=(300, 500, 200, 100), random_state=1))
 ])
 
 df_train = pd.read_csv('Training_Dataset.csv')
-df_test = pd.read_csv('Leaderboard_Dataset.csv')
+df_test_1 = pd.read_csv('Final_Dataset.csv').append(pd.read_csv('Twist_final_data.csv'))
+
+lis = []
+for i in range(34):
+    if i == 0:
+        lis.append(df_test_1['party_voted_past'])
+    else:
+        lis.append(df_test_1['mvar' + str(i)])
+
+df_test = pd.concat(lis, axis=1)
 
 u_vals = np.unique(np.r_[df_train['mvar32'].as_matrix(), df_test['mvar32'].as_matrix(),
                          df_train['mvar33'].as_matrix(), df_test['mvar33'].as_matrix()])
@@ -162,14 +169,18 @@ X, y = df_train.iloc[:, 1:-1].values, df_train.iloc[:, -1].values
 
 le = LabelEncoder()
 y = le.fit_transform(y)
+
 if not os.path.isfile(fname):
     pipeline.fit(X, y)
     s = joblib.dump(pipeline, fname)
 else:
     pipeline = joblib.load(fname)
 
-y_pred = pipeline.predict(df_test.iloc[:, 1:].values)
+print(len(np.where(pipeline.named_steps['feature_sel'].get_support() == True)[0]),
+      np.c_[df_test.iloc[:, -1].values, df_test.iloc[:, 1:-1].values])
+y_pred = pipeline.predict(df_test.iloc[:, :].values)
 
 y_pred = le.inverse_transform(y_pred)
 
-pd.DataFrame(np.c_[df_test.iloc[:, 0].values, y_pred]).to_csv('nelsonmurdock_IITMadras_1.csv', header=False, index=False)
+pd.DataFrame(np.c_[df_test_1.iloc[:, 0].values, y_pred]).to_csv('nelsonmurdock_IITMadras.csv', header=False,
+                                                                index=False)
